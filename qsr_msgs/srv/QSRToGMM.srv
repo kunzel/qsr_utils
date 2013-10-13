@@ -1,0 +1,7 @@
+string object
+string landmark
+string[] qsr
+---
+qsr_msgs/Gaussian2D[] gaussian
+float32[] weight
+

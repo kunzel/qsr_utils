@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package>
+  <name>qsr_utils</name>
+  <version>0.0.1</version>
+  <description>The qsr_utils package</description>
+
+  <maintainer email="l.kunze@cs.bham.ac.uk">Lars Kunze</maintainer>
+
+  <license>BSD</license>
+
+  <author email="l.kunze@cs.bham.ac.uk">Lars Kunze</author> 
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <export>
+    <metapackage/>
+  </export>
+</package>
