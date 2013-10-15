@@ -1,13 +1,18 @@
 #!/usr/bin/env python
 
 from qsr_msgs.srv import *
+from qsr_msgs.msg import *
 import rospy
 import getopt
 import json
+import math
 
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
+
+
 
 class QSR2GMM():
     "A class for transforming QSRs in GMMs"
@@ -63,7 +68,11 @@ class QSR2GMM():
 
         x_rel = position[self.obj.lower()][0] - position[self.landmark.lower()][0]
         y_rel = position[self.obj.lower()][1] - position[self.landmark.lower()][1]
-        relative_pos = [x_rel, y_rel]
+
+        x_rel_rotated = x_rel * math.cos(math.pi * 3/2) - y_rel * math.sin(math.pi * 3/2)
+        y_rel_rotated = x_rel * math.sin(math.pi * 3/2) + y_rel * math.cos(math.pi * 3/2)
+        
+        relative_pos = [x_rel_rotated, y_rel_rotated]
         
         if distance[0] == 'close':
             self.dir_close_pos[relation].append(relative_pos)
@@ -121,21 +130,59 @@ class QSR2GMM():
             for pos in self.dir_distant_pos[rel]:
                 x_dist.append(pos[0])
                 y_dist.append(pos[1])
-                
 
-        fig, ax = plt.subplots()
-        ax.plot(x_close, y_close, 'o')
-        ax.plot(x_dist, y_dist, 'x')
-        ax.set_title(self.obj + 'WRT' + self.landmark)
-        plt.show()
 
-        calc_GMM()
+        # fig, ax = plt.subplots()
+        # ax.plot(x_close, y_close, 'o')
+        # ax.plot(x_dist,  y_dist, 'x')
+        # ax.set_title(self.obj + ' WRT ' + self.landmark)
+        # ci = Circle((0,0), 0.1,facecolor='r', alpha=0.2)
+        # ax.add_artist(ci)
+        # ci.set_clip_box(ax.bbox)
+        # plt.show()
 
-                
-        print("Directions:", self.dir_count)
-        print("Distances", self.dist_count)
-        print("Dir/Close:", self.dir_close_count)
-        print("Dir/Distant", self.dir_distant_count)
+        # fig, ax = plt.subplots()
+        # im = ax.hexbin(x_close, y_close, gridsize=20)
+        # fig.colorbar(im, ax=ax)
+        # plt.show()
+        
+        weights, gaussians = self.calc_GMM()
+
+        num_of_samples = 1000
+
+        tmp_x = list()
+        tmp_y = list()
+        for i in range(len(weights)):
+            cov = gaussians[i].covariance           
+            x,y = np.random.multivariate_normal(gaussians[i].mean,
+                                                [[cov[0],cov[1]], [cov[2],cov[3]]],
+                                                int(weights[i] * num_of_samples)).T
+            tmp_x.append(x)
+            tmp_y.append(y)
+            
+        gmm_x = [val for subl in tmp_x for val in subl]
+        gmm_y = [val for subl in tmp_y for val in subl] 
+
+
+        # hist,xedges,yedges = np.histogram2d(gmm_x,gmm_y,bins=40, range=[[-0.75, 0.75], [-0.75, 0.75]])
+        # extent = [xedges[0], xedges[-1], yedges[0], yedges[-1] ]
+        # plt.imshow(hist.T,extent=extent,interpolation='nearest',origin='lower')
+        # plt.colorbar()
+        # plt.show()
+
+        response = QSRToGMMResponse()
+
+        response.gaussian = gaussians
+        response.weight = weights
+
+        return response
+
+    def calc_GMM(self):
+
+        print("Directions:", self.dir_count, sum(self.dir_count.values()))
+        print("Distances", self.dist_count, sum(self.dist_count.values()))
+        print("Dir/Close:", self.dir_close_count, sum(self.dir_close_count.values()))
+        print("Dir/Distant", self.dir_distant_count, sum(self.dir_distant_count.values()))
         #print("Rel position (close)", self.dir_close_pos)
         #print("Rel position (distant)", self.dir_distant_pos)
 
@@ -143,12 +190,72 @@ class QSR2GMM():
         rospy.loginfo(self.landmark)
         rospy.loginfo(self.qsr)
 
-# Which QSRs are relevant? ALL or only parts of it?
+        threshold = 0.03
+        total_count = sum(self.dir_count.values())
         
-        return QSRToGMMResponse()
+        gmm_count = 0
+        gmm_dir_close = list()
+        gmm_dir_distant = list()
+        for rel in self.dir_close_count.keys():
+            if float(self.dir_close_count[rel])/total_count  > threshold:
+                gmm_count += self.dir_close_count[rel]
+                gmm_dir_close.append(rel)
+            if float(self.dir_distant_count[rel])/total_count  > threshold:
+                gmm_count += self.dir_distant_count[rel]
+                gmm_dir_distant.append(rel)
 
-    def calc_GMM(self):
-        pass
+        print("Total count: ", total_count)
+        print("GMM count", gmm_count)
+        print("GMM dir close", gmm_dir_close)
+        print("GMM dir distant", gmm_dir_distant)
+
+
+        weights = list()
+        gaussians = list()
+        
+        for rel in gmm_dir_close:
+            x = list()
+            y = list()
+            for pos in self.dir_close_pos[rel]:
+                x.append(pos[0])
+                y.append(pos[1])
+
+            x_mean = np.mean(x)
+            y_mean = np.mean(y)
+            cov = np.cov(x,y)
+            gaussian = Gaussian2D()
+            gaussian.mean = [x_mean, y_mean]
+            cov_lst = [val for subl in cov.tolist() for val in subl] 
+            gaussian.covariance = cov_lst
+            
+            weight =  float(self.dir_close_count[rel])/gmm_count
+            
+            weights.append(weight)
+            gaussians.append(gaussian)
+
+        for rel in gmm_dir_distant:
+            x = list()
+            y = list()
+            for pos in self.dir_distant_pos[rel]:
+                x.append(pos[0])
+                y.append(pos[1])
+
+            x_mean = np.mean(x)
+            y_mean = np.mean(y)
+            cov = np.cov(x,y)
+            gaussian = Gaussian2D()
+            gaussian.mean = [x_mean, y_mean]
+            cov_lst = [val for subl in cov.tolist() for val in subl] 
+            gaussian.covariance = cov_lst
+            
+            weight =  float(self.dir_distant_count[rel])/gmm_count
+            
+            weights.append(weight)
+            gaussians.append(gaussian)
+        
+        print("Sum of weights:", sum(weights))
+        return weights, gaussians 
+            
 
 
 class Usage(Exception):
