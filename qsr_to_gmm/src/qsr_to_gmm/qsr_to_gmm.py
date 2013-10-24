@@ -6,11 +6,55 @@ import rospy
 import getopt
 import json
 import math
+from operator import itemgetter
+import tf
 
 import numpy as np
 import matplotlib
+from matplotlib import cm
+import matplotlib.patches as mpatches
+from matplotlib.mlab import griddata
+from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
+
+class BBox():
+    """ Bounding box of an object with getter functions.
+    """
+    def __init__(self, bbox):
+        # Calc x_min and x_max for obj1
+        x_sorted = sorted(bbox, key=itemgetter(0))
+        self.x_min = x_sorted[0][0]
+        self.x_max = x_sorted[7][0]
+
+        # Calc y_min and y_max for obj
+        y_sorted = sorted(bbox, key=itemgetter(1))
+        self.y_min = y_sorted[0][1]
+        self.y_max = y_sorted[7][1]
+
+        # Calc z_min and z_max for obj
+        z_sorted = sorted(bbox, key=itemgetter(2))
+        self.z_min = z_sorted[0][2]
+        self.z_max = z_sorted[7][2]
+        
+    def get_x_min(self):
+        return self.x_min
+
+    def get_x_max(self):
+        return self.x_max
+
+    def get_y_min(self):
+        return self.y_min
+
+    def get_y_max(self):
+        return self.y_max
+
+    def get_z_min(self):
+        return self.z_min
+
+    def get_z_max(self):
+        return self.z_max
+    
 
 
 
@@ -109,12 +153,24 @@ class QSR2GMM():
 
         for rel in ['close','distant']:
             self.dist_count[rel] = 0
-                    
+
+        landmark_bbox = None
+        landmark_orientation = None
+
+        count_obj = 0
+        count_obj_landmark = 0
         for scn in self.qsr_model:
             scn_types = scn[1]['type'].values()
+            if self.obj in scn_types:
+                count_obj += 1
             if self.obj in scn_types and self.landmark in scn_types:
+                count_obj_landmark += 1
                 #rospy.loginfo(scn[0])
                 self.qsr_to_hist(scn[1]['qsr'],scn[1]['position'])
+                if landmark_bbox == None:
+                    landmark_bbox = scn[1]['bbox'][self.landmark.lower()]
+                    landmark_orientation = scn[1]['orientation'][self.landmark.lower()]
+
 
 
         x_close = list()
@@ -163,12 +219,121 @@ class QSR2GMM():
         gmm_x = [val for subl in tmp_x for val in subl]
         gmm_y = [val for subl in tmp_y for val in subl] 
 
-
         # hist,xedges,yedges = np.histogram2d(gmm_x,gmm_y,bins=40, range=[[-0.75, 0.75], [-0.75, 0.75]])
         # extent = [xedges[0], xedges[-1], yedges[0], yedges[-1] ]
         # plt.imshow(hist.T,extent=extent,interpolation='nearest',origin='lower')
         # plt.colorbar()
         # plt.show()
+
+        #print("ENTROPY:",self.entropy(gmm_x,gmm_y))
+
+        
+        # uniform sampling instead of samples from data set
+        gmm_x = np.random.uniform(-2.2,2.2,10000)
+        gmm_y = np.random.uniform(-1.4,1.4,10000)
+        
+        gmm_z = [0] * len(gmm_x)
+
+        
+        
+        for i in range(len(gmm_z)):
+            for j in range(len(weights)):
+                cov = gaussians[j].covariance
+                gmm_z[i] += weights[j] * matplotlib.mlab.bivariate_normal(gmm_x[i],
+                                                                         gmm_y[i],
+                                                                         math.sqrt(cov[0]),
+                                                                         math.sqrt(cov[3]),
+                                                                         gaussians[j].mean[0],
+                                                                         gaussians[j].mean[1],
+                                                                         cov[1])
+
+        ### CALC ENTROPY
+        ex = seq(-2.0, 2.0, 0.05)
+        ey = seq(-1.2, 1.2, 0.05)
+        exy = list()
+
+        for xx in ex:
+            for yy in ey:
+                exy.append([xx,yy])
+                
+        ez = [0.0] * len(exy)
+        for i in range(len(ez)): 
+            for j in range(len(weights)):
+                cov = gaussians[j].covariance
+                ez[i] += weights[j] * matplotlib.mlab.bivariate_normal(exy[i][0],
+                                                                          exy[i][1],
+                                                                          math.sqrt(cov[0]),
+                                                                          math.sqrt(cov[3]),
+                                                                          gaussians[j].mean[0],
+                                                                          gaussians[j].mean[1],
+                                                                          cov[1])
+
+
+        pmf = [float(ez[i])/sum(ez) for zz in ez]
+
+        entr = entropy(pmf)
+        p_ol = float(count_obj_landmark)/count_obj
+
+        print(self.obj, self.landmark)
+        print("ENTROPY(L,O) = ", entr)
+        print("P(L|O)       = ", p_ol)
+        score = p_ol * (float(1.0)/float(entr))
+        print("SCORE =      = ", score)
+        print("log(SCORE)   = ", math.log(score))
+
+        
+
+        # OLD FIGURES
+        #print(self.landmark, landmark_bbox)        
+        #print len(gmm_x), len(gmm_y), len(gmm_z)
+        # fig = plt.figure()
+        # ax = fig.add_subplot(111,projection='3d')
+        # #ax.plot_trisurf(gmm_x, gmm_y, gmm_z, cmap=cm.jet, linewidth=0.2)
+        # ax.scatter(gmm_x, gmm_y, gmm_z, c='r', marker='o')
+        # plt.show()
+
+        # MOST RECENT FIGURE!!!!!!!!!!!!!!!!!!!!!!!
+                
+        lm_yaw =  tf.transformations.euler_from_quaternion(landmark_orientation,axes='sxyz')
+        print("landmark orientation: ", landmark_orientation)
+        print("landmark orientation: ", lm_yaw)
+
+        rotated_bbox = list()
+        for corner in landmark_bbox:
+            rx = corner[0] * math.cos(-lm_yaw[0]) - corner[1] * math.sin(-lm_yaw[0])
+            ry = corner[0] * math.sin(-lm_yaw[0]) + corner[1] * math.cos(-lm_yaw[0])
+            rz = corner[2]
+            rotated_bbox.append([rx,ry,rz])
+        
+        landmark_local_bbox = BBox(rotated_bbox)
+        
+
+        x_dim = (landmark_local_bbox.get_x_max() - landmark_local_bbox.get_x_min()) 
+        y_dim = (landmark_local_bbox.get_y_max() - landmark_local_bbox.get_y_min()) 
+               
+        #rect   =  mpatches.Rectangle([-y_dim/2, -x_dim/2], y_dim, x_dim, facecolor='white')
+        rect   =  plt.Circle((0,0), 0.05, facecolor='white')   
+
+        plt.gca().add_patch(rect)
+        
+        # Define grid.
+        xi = np.linspace(-2.0,2.0,1000)
+        yi = np.linspace(-1.2,1.2,1000)
+        # grid the data.
+        zi = griddata(gmm_x,gmm_y,gmm_z,xi,yi,interp='linear')
+        # contour the gridded data, plotting dots at the nonuniform data points.
+        CS = plt.contour(xi,yi,zi,15,linewidths=0.5,colors='k')
+        CS = plt.contourf(xi,yi,zi,15,cmap=plt.cm.jet ,vmax=abs(zi).max(), vmin=-abs(zi).max())
+        plt.colorbar() # draw colorbar
+        # plot data points.
+        #plt.scatter(gmm_x,gmm_y,marker='o',c='b',s=5,zorder=10)
+        #plt.plot(gmm_x,  gmm_y, 'o')
+        plt.xlim(-2.0,2.0)
+        plt.ylim(-1.2,1.2)
+        plt.show()
+
+        # END MOST RECENT FIGURE!!!!!!!!!!!!!!!!!!!!!!!
+        
 
         response = QSRToGMMResponse()
 
@@ -176,6 +341,7 @@ class QSR2GMM():
         response.weight = weights
 
         return response
+
 
     def calc_GMM(self):
 
@@ -255,7 +421,19 @@ class QSR2GMM():
         
         print("Sum of weights:", sum(weights))
         return weights, gaussians 
-            
+
+
+
+def entropy(pmf):
+    return -(pmf * np.log(pmf)/np.log(2)).sum()
+
+
+def seq(start, stop, step=1):
+    n = int(round((stop - start)/float(step)))
+    if n > 1:
+        return([round(start + step*i,2) for i in range(n+1)])
+    else:
+        return([])
 
 
 class Usage(Exception):
