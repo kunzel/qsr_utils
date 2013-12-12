@@ -131,6 +131,7 @@ class QSR2GMM():
         # Get arguments from request
         self.obj = req.object
         self.landmark = req.landmark
+        
         self.qsr = req.qsr
 
         self.dir_count = dict()
@@ -160,18 +161,22 @@ class QSR2GMM():
         count_obj = 0
         count_obj_landmark = 0
         for scn in self.qsr_model:
-            scn_types = scn[1]['type'].values()
+            scn_types = scn['type'].values()
             if self.obj in scn_types:
                 count_obj += 1
             if self.obj in scn_types and self.landmark in scn_types:
                 count_obj_landmark += 1
                 #rospy.loginfo(scn[0])
-                self.qsr_to_hist(scn[1]['qsr'],scn[1]['position'])
+                self.qsr_to_hist(scn['qsr'],scn['position'])
                 if landmark_bbox == None:
-                    landmark_bbox = scn[1]['bbox'][self.landmark.lower()]
-                    landmark_orientation = scn[1]['orientation'][self.landmark.lower()]
+                    landmark_bbox = scn['bbox'][self.landmark.lower()]
+                    landmark_orientation = scn['orientation'][self.landmark.lower()]
 
 
+        if count_obj == 0 or count_obj_landmark == 0:
+            response = QSRToGMMResponse()
+            return response
+            
 
         x_close = list()
         x_dist =  list()
@@ -203,7 +208,11 @@ class QSR2GMM():
         # plt.show()
         
         weights, gaussians = self.calc_GMM()
-
+        
+        if len(weights) == 0:
+            response = QSRToGMMResponse()
+            return response
+        
         num_of_samples = 1000
 
         tmp_x = list()
@@ -269,7 +278,13 @@ class QSR2GMM():
                                                                           cov[1])
 
 
-        pmf = [float(ez[i])/sum(ez) for zz in ez]
+        sum_ez = sum(ez)
+        if sum_ez == 0:
+            sum_ez = 1
+
+        # STUPID BUG!!!!
+        #pmf = [float(ez[i])/sum(ez) for zz in ez] ???? Where dos i come from?
+        pmf = [float(zz)/sum_ez for zz in ez]
 
         entr = entropy(pmf)
         p_ol = float(count_obj_landmark)/count_obj
@@ -330,7 +345,8 @@ class QSR2GMM():
         #plt.plot(gmm_x,  gmm_y, 'o')
         plt.xlim(-2.0,2.0)
         plt.ylim(-1.2,1.2)
-        plt.show()
+
+        #plt.show()
 
         # END MOST RECENT FIGURE!!!!!!!!!!!!!!!!!!!!!!!
         
@@ -339,6 +355,7 @@ class QSR2GMM():
 
         response.gaussian = gaussians
         response.weight = weights
+        response.probability = p_ol
 
         return response
 
@@ -356,17 +373,22 @@ class QSR2GMM():
         rospy.loginfo(self.landmark)
         rospy.loginfo(self.qsr)
 
-        threshold = 0.03
+        threshold = 0.05
+        min_examples = 10
+        
         total_count = sum(self.dir_count.values())
+
+        if total_count == 0:
+            total_count = 1
         
         gmm_count = 0
         gmm_dir_close = list()
         gmm_dir_distant = list()
         for rel in self.dir_close_count.keys():
-            if float(self.dir_close_count[rel])/total_count  > threshold:
+            if float(self.dir_close_count[rel])/total_count  > threshold and float(self.dir_close_count[rel]) >= min_examples:
                 gmm_count += self.dir_close_count[rel]
                 gmm_dir_close.append(rel)
-            if float(self.dir_distant_count[rel])/total_count  > threshold:
+            if float(self.dir_distant_count[rel])/total_count  > threshold and float(self.dir_distant_count[rel]) >= min_examples:
                 gmm_count += self.dir_distant_count[rel]
                 gmm_dir_distant.append(rel)
 
@@ -375,9 +397,9 @@ class QSR2GMM():
         print("GMM dir close", gmm_dir_close)
         print("GMM dir distant", gmm_dir_distant)
 
-
         weights = list()
         gaussians = list()
+
         
         for rel in gmm_dir_close:
             x = list()
